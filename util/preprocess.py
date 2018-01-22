@@ -62,10 +62,30 @@ class VideoVGGExtractor(object):
         path = anno['frame_path']
         start = anno['start']
         end = anno['end']
-        frames = self._select_frames(path, start, end-3)
+        frames = self._select_frames(path, start, end)
         # We usually take features after the non-linearity, by convention.
         feature = self.sess.run(
             self.vgg16.relu7, feed_dict={self.inputs: frames})
+        return feature
+
+    def extract_from_h5(self, h5array):
+        """Get VGG fc7 activations as representation for video.
+
+        Args:
+            h5array: frames list for image data.
+        Returns:
+            feature: [self.frame_number, 4096]
+        """
+        # Ignore some frame at begin and end.
+        end = h5array.shape[0]
+        frames = list()
+        for i in np.linspace(0, end, self.frame_num + 2)[1:self.frame_num + 1]:
+            img = h5array[int(i)]
+            frames.append(np.array(img))
+        # We usually take features after the non-linearity, by convention.
+        feature = self.sess.run(
+            self.vgg16.relu7, feed_dict={self.inputs: frames})
+
         return feature
 
 
@@ -97,7 +117,6 @@ class VideoC3DExtractor(object):
             clips: list of clips.
         """
         clips = list()
-        total_frames = end - start
         for i in np.linspace(start, end, self.clip_num + 2)[1:self.clip_num + 1]:
             # Select center frame first, then include surrounding frames
             clip_start = int(i) - 8
@@ -135,3 +154,40 @@ class VideoC3DExtractor(object):
         feature = self.sess.run(
             self.c3d_features, feed_dict={self.inputs: clips})
         return feature
+
+    def extract_from_h5(self, h5array):
+        """Get C3D fc7 activations as representation for video.
+
+        Args:
+            h5array: frames list for image data.
+        Returns:
+            feature: [self.frame_number, 4096]
+        """
+        # Ignore some frame at begin and end.
+        end = h5array.shape[0]
+        clips = list()
+
+        for i in np.linspace(0, end, self.clip_num + 2)[1:self.clip_num + 1]:
+            # Select center frame first, then include surrounding frames
+            clip_start = int(i) - 8
+            clip_end = int(i) + 8
+            if clip_start < 0:
+                clip_end = clip_end - clip_start
+                clip_start = 0
+            if clip_end > end:
+                clip_start = clip_start - (clip_end - end)
+                clip_end = end
+            new_clip = []
+            for j in range(16):
+                img = h5array[j]
+                frame_data = np.array(img) * 1.0
+                frame_data -= self.mean[j]
+                new_clip.append(frame_data)
+            clips.append(new_clip)
+
+        feature = self.sess.run(
+            self.c3d_features, feed_dict={self.inputs: clips})
+
+        return feature
+
+
