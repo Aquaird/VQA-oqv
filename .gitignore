@@ -2,3 +2,5 @@
 *.npy
 *.pyc
 *.model
+output
+tensorboard

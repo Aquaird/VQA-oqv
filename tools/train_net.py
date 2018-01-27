@@ -6,7 +6,9 @@
 
 import _init_paths
 from model.config import cfg, cfg_from_file, cfg_from_list, get_output_dir, get_output_tb_dir
+from model.train import train_net
 from dataset.tfrecord import tf_reader
+from nets.network import Network
 import argparse
 import numpy as np
 import sys
@@ -31,7 +33,7 @@ def parse_args():
                         help='initialize with pretrained model')
     parser.add_argument('--iters', dest='max_iters',
                         help='number of iterations to train',
-                        default=70000, type=int)
+                        default=700*cfg.TRAIN.EPOCH, type=int)
     parser.add_argument('--tag', dest='tag',
                         help='tag of the model',
                         default=None, type=str)
@@ -76,37 +78,9 @@ if __name__ == '__main__':
     tb_dir =  get_output_tb_dir(args.dataset_name, args.tag)
     print('TensorFlow summaries will be saved to `{:s}`'.format(tb_dir))
 
-    train_batch_iterator = tf_reader('/data/mm/dataset/activityNet/train.tfrecords', cfg['TRAIN']).batch_iterator
-    anno = json.load(open('../dataset/activityNet/qa_anno/anno_all.json','r'))['train']
-    train_batch = train_batch_iterator.get_next()
-    with tf.Session() as sess:
-        sess.run(train_batch_iterator.initializer)
-        for i in range(1):
-            f = sess.run(train_batch)
-            print(f)
-            qa_id = f['qa_id']
-            for b in range(len(qa_id)):
-                print(anno[str(qa_id[b][0])]['question_code'])
-                print(np.argmax(f['question'][b], axis=-1))
+    train_reader = tf_reader('/data/mm/dataset/activityNet/train.tfrecords', cfg['TRAIN'])
+    valid_reader = tf_reader('/data/mm/dataset/activityNet/valid.tfrecords', cfg['TEST'])
+    test_reader = tf_reader('/data/mm/dataset/activityNet/test.tfrecords', cfg['TEST'])
 
-    #net = gca()
-    #train_net(net, train_net, )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    net = Network(train_reader.dataset.output_types, train_reader.dataset.output_shapes)
+    train_net(net, train_reader, valid_reader, test_reader, output_dir, tb_dir,args.max_iters)

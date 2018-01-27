@@ -7,14 +7,16 @@ class tf_reader(object):
     '''dataset reader'''
 
     def __init__(self, tf_record_path, config):
-        self.config = config 
-        dataset = tf.data.TFRecordDataset([tf_record_path])
+        self.config = config
+        print(config)
+        dataset = tf.data.TFRecordDataset([tf_record_path], buffer_size=config.BUFFER_SIZE)
+        dataset = dataset.repeat(cfg.TRAIN.EPOCH)
         if self.config.SHUFFLE:
-            dataset = dataset.shuffle(self.config.BATCH_SIZE * 5)
-        dataset = dataset.map(self.parse_function)
+            dataset = dataset.shuffle(self.config.BATCH_SIZE * 3)
+        dataset = dataset.map(self.parse_function, num_parallel_calls=12)
         dataset = dataset.prefetch(self.config.BUFFER_SIZE)
-        dataset = dataset.batch(self.config.BATCH_SIZE)
-        self.batch_iterator = dataset.make_initializable_iterator()
+        self.dataset = dataset.batch(self.config.BATCH_SIZE)
+        self.batch_iterator = self.dataset.make_initializable_iterator()
 
     def parse_function(self, example_proto):
         features = {

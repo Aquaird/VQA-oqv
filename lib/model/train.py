@@ -22,11 +22,11 @@ class SolverWrapper(object):
     '''
     wrapper class for the training process
     '''
-    def __init__(self, sess, network, data_batch, output_dir, tbdir):
+    def __init__(self, sess, network, train_handle, valid_handle, test_handle, output_dir, tbdir):
         self.net = network
-        self.train_batch = data_batch[0]
-        self.valid_batch = data_batch[1]
-        self.test_batch = data_batch[2]
+        self.train_handle = train_handle
+        self.valid_handle = valid_handle
+        self.test_handle = test_handle
         self.output_dir = output_dir
         self.tbdir = tbdir
         self.tbvaldir = tbdir + '_val'
@@ -45,13 +45,13 @@ class SolverWrapper(object):
             os.makedirs(self.output_dir)
 
         # Store the model snapshot
-        filename = cfg.TRAIN.SNAPSHOT_PREFIX + '_iter_{:d}'.format(iter) + '.ckpt'
+        filename = 'iter_{:d}'.format(iter) + '.ckpt'
         filename = os.path.join(self.output_dir, filename)
         self.saver.save(sess, filename)
         print('Wrote snapshot to: {:s}'.format(filename))
 
         # Also store some meta information, random state, etc.
-        nfilename = cfg.TRAIN.SNAPSHOT_PREFIX + '_iter_{:d}'.format(iter) + '.pkl'
+        nfilename = 'iter_{:d}'.format(iter) + '.pkl'
         nfilename = os.path.join(self.output_dir, nfilename)
         # current state of numpy random
         st0 = np.random.get_state()
@@ -75,17 +75,6 @@ class SolverWrapper(object):
 
         return last_snapshot_iter
 
-    def get_variables_in_checkpoint_file(self, file_name):
-        try:
-            reader = pywrap_tensorflow.NewCheckpointReader(file_name)
-            var_to_shape_map = reader.get_variable_to_shape_map()
-            return var_to_shape_map 
-        except Exception as e:  # pylint: disable=broad-except
-            print(str(e))
-            if "corrupted compressed block contents" in str(e):
-                print("It's likely that your checkpoint file has been compressed "
-                "with SNAPPY.")
-
     def construct_graph(self, sess):
         with sess.graph.as_default():
             # Set the random seed for tensorflow
@@ -93,7 +82,7 @@ class SolverWrapper(object):
             # Build the main computation graph
             layers = self.net.create_architecture('TRAIN', tag='default')
             # Define the loss
-            loss = layers['total_loss']
+            loss = layers['class_loss']
             # Set learning rate and momentum
             lr = tf.Variable(cfg.TRAIN.LEARNING_RATE, trainable=False)
             self.optimizer = tf.train.MomentumOptimizer(lr, cfg.TRAIN.MOMENTUM)
@@ -125,17 +114,16 @@ class SolverWrapper(object):
         return lr, train_op
 
     def find_previous(self):
-        sfiles = os.path.join(self.output_dir, cfg.TRAIN.SNAPSHOT_PREFIX + '_iter_*.ckpt.meta')
+        sfiles = os.path.join(self.output_dir, 'iter_*.ckpt.meta')
         sfiles = glob.glob(sfiles)
         sfiles.sort(key=os.path.getmtime)
         # Get the snapshot name in TensorFlow
         redfiles = []
         for stepsize in cfg.TRAIN.STEPSIZE:
-            redfiles.append(os.path.join(self.output_dir, 
-                                         cfg.TRAIN.SNAPSHOT_PREFIX + '_iter_{:d}.ckpt.meta'.format(stepsize+1)))
+            redfiles.append(os.path.join(self.output_dir, 'iter_{:d}.ckpt.meta'.format(stepsize+1)))
         sfiles = [ss.replace('.meta', '') for ss in sfiles if ss not in redfiles]
 
-        nfiles = os.path.join(self.output_dir, cfg.TRAIN.SNAPSHOT_PREFIX + '_iter_*.pkl')
+        nfiles = os.path.join(self.output_dir, 'iter_*.pkl')
         nfiles = glob.glob(nfiles)
         nfiles.sort(key=os.path.getmtime)
         redfiles = [redfile.replace('.ckpt.meta', '.pkl') for redfile in redfiles]
@@ -233,22 +221,23 @@ class SolverWrapper(object):
             now = time.time()
             if iter == 1 or now - last_summary_time > cfg.TRAIN.SUMMARY_INTERVAL:
                 # Compute the graph with summary
-                total_loss, q_attention, o_attentions, t_attentions, summary = self.net.train_step_with_summary(sess, self.train_batch, train_op)
+                word_pred, loss, summary = self.net.train_step_with_summary(sess, self.train_handle, train_op)
                 self.writer.add_summary(summary, float(iter))
                 # Also check the summary on the validation set
-                summary_val = self.net.get_summary(sess, self.valid_batch)
-                summary_test = self.net.get_summary(sess, self.test_batch)
+                summary_val = self.net.get_summary(sess, self.valid_handle)
+                self.valwriter.add_summary(summary_val, float(iter))
+                summary_test = self.net.get_summary(sess, self.test_handle)
                 self.testwriter.add_summary(summary_test, float(iter))
                 last_summary_time = now
             else:
                 # Compute the graph without summary
-                total_loss, q_attention, o_attentions, t_attentions, summary = self.net.train_step_with_summary(sess, self.train_batch, train_op)
+                word_pred, loss = self.net.train_step(sess, self.train_handle, train_op)
             timer.toc()
 
             # Display training information
             if iter % (cfg.TRAIN.DISPLAY) == 0:
-                print('iter: %d / %d, total loss: %.6f\n >>> lr: %f' % \
-                      (iter, max_iters, total_loss, lr.eval()))
+                print('iter: %d / %d, loss: %.6f\n >>> lr: %f' % \
+                      (iter, max_iters, loss, lr.eval()))
                 print('speed: {:.3f}s / iter'.format(timer.average_time))
 
             # Snapshotting
@@ -274,19 +263,27 @@ class SolverWrapper(object):
 
 
 
-def train_net(network, data_iterators, output_dir, tb_dir, max_iters=40000):
+def train_net(network, train_reader, valid_reader, test_reader, output_dir, tb_dir, max_iters=40000):
     """Train a GCA-net"""
 
     tfconfig = tf.ConfigProto(allow_soft_placement=True)
     tfconfig.gpu_options.allow_growth = True
 
     with tf.Session(config=tfconfig) as sess:
-        data_batch = []
-        for i in data_iterators:
-            data_batch.append(i.get_next())
-            sess.run(i.initializer)
 
-        sw = SolverWrapper(sess, network, data_batch, output_dir, tb_dir)
+        iter_train_handle = train_reader.batch_iterator.string_handle()
+        iter_valid_handle = valid_reader.batch_iterator.string_handle()
+        iter_test_handle = test_reader.batch_iterator.string_handle()
+
+        sess.run(train_reader.batch_iterator.initializer)
+        sess.run(valid_reader.batch_iterator.initializer)
+        sess.run(test_reader.batch_iterator.initializer)
+
+        handle_train = sess.run(iter_train_handle)
+        handle_valid = sess.run(iter_valid_handle)
+        handle_test = sess.run(iter_test_handle)
+
+        sw = SolverWrapper(sess, network, handle_train, handle_valid, handle_test, output_dir, tb_dir)
         print('Solving...')
         sw.train_model(sess, max_iters)
         print('done solving')

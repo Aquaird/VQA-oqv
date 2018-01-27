@@ -9,19 +9,20 @@ cfg = __C
 # Training options
 __C.TRAIN = edict()
 # Shuffle
-__C.TRAIN.SHUFFLE = True
+__C.TRAIN.SHUFFLE = False
 # Prefetch Buffer size
-__C.TRAIN.BUFFER_SIZE = 500
+__C.TRAIN.BUFFER_SIZE = 1000
 # Initial learning rate
-__C.TRAIN.LEARNING_RATE = 0.001
+__C.TRAIN.LEARNING_RATE = 0.01
+# Epoch
+__C.TRAIN.EPOCH = 50
 # Momentum
 __C.TRAIN.MOMENTUM = 0.9
 # Weight decay
-__C.TRAIN.WEIGHT_DECAY = 0.0001
+__C.TRAIN.WEIGHT_DECAY = 0.00001
 # Learning rate decay
-__C.TRAIN.GAMMA = 0.1
 # Step size for reducing the learning rate
-__C.TRAIN.STEPSIZE = [30000]
+__C.TRAIN.STEPSIZE = [5000]
 # Iteration intervals for showing the loss during training, on command line interface
 __C.TRAIN.DISPLAY = 10
 # Whether to double the learning rate for bias
@@ -33,17 +34,21 @@ __C.TRAIN.BIAS_DECAY = False
 # The number of snapshots kept, older ones are deleted to save space
 __C.TRAIN.SNAPSHOT_KEPT = 3
 # The time interval for saving tensorflow summaries
-__C.TRAIN.SUMMARY_INTERVAL = 180
+__C.TRAIN.SUMMARY_INTERVAL = 100
 # Minibatch size
-__C.TRAIN.BATCH_SIZE = 64
+__C.TRAIN.BATCH_SIZE = 32
 # Iterations between snapshots
-__C.TRAIN.SNAPSHOT_ITERS = 5000
+__C.TRAIN.SNAPSHOT_ITERS = 500
 # Whether or not has candidate
 __C.TRAIN.CANDIDATE = True
+
 #
 # Testing options
 #
 __C.TEST = edict()
+__C.TEST.SHUFFLE=False
+__C.TEST.BATCH_SIZE=1
+__C.TEST.BUFFER_SIZE=1000
 
 # For reproducibility
 __C.RNG_SEED = 3
@@ -54,13 +59,14 @@ __C.DATA_DIR = osp.abspath(osp.join(__C.ROOT_DIR, 'dataset'))
 # Name (or path to) the matlab executable
 __C.MATLAB = 'matlab'
 # Place outputs under an experiments directory
-__C.EXP_DIR = 'default'
+__C.EXP_DIR = 'init_ex'
 
-__C.T_ATTEN_DIM = 50
-__C.G_ATTEN_DIM = 50
-__C.LSTM_SIZE = 500
+__C.T_ATTEN_DIM = 300
+__C.G_ATTEN_DIM = 300
+__C.LSTM_SIZE = 1024
 __C.T_ATTEN_FEATURE_DIM = 500
 __C.MLP_SIZE = 3
+__C.GAMMA = 0.5
 
 def get_output_dir(dataset, tag):
   outdir = osp.abspath(osp.join(__C.ROOT_DIR, 'output', __C.EXP_DIR, dataset))
