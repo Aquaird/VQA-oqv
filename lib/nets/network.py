@@ -79,7 +79,7 @@ class Network(object):
             # [batch_size, 4096]
             feature_t_atten = tf.reshape(feature_t_atten, [-1, 4096])
             w_t_atten_feat = tf.get_variable('w_t_atten_feat', [4096, cfg.T_ATTEN_FEATURE_DIM])
-            feature_t_atten = tf.matmul(feature_t_atten, w_t_atten_feat)
+            feature_t_atten = tf.nn.tanh(tf.matmul(feature_t_atten, w_t_atten_feat))
             # [batch_size, cfg.T_ATTEN_FEATURE_DIM]
             self._feature_t_atten = feature_t_atten
 
