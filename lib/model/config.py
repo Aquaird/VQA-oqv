@@ -13,9 +13,13 @@ __C.TRAIN.SHUFFLE = False
 # Prefetch Buffer size
 __C.TRAIN.BUFFER_SIZE = 1000
 # Initial learning rate
-__C.TRAIN.LEARNING_RATE = 0.01
+__C.TRAIN.LEARNING_RATE = 0.001
+# learning decay
+__C.TRAIN.LEARNING_RATE_DECAY = 0.98
 # Epoch
-__C.TRAIN.EPOCH = 50
+__C.TRAIN.BATCH_SIZE = 16
+__C.TRAIN.EPOCH = 70
+__C.TRAIN.DECAY_EPOCH = 1
 # Momentum
 __C.TRAIN.MOMENTUM = 0.9
 # Weight decay
@@ -32,13 +36,12 @@ __C.TRAIN.TRUNCATED = False
 # Whether to have weight decay on bias as well
 __C.TRAIN.BIAS_DECAY = False
 # The number of snapshots kept, older ones are deleted to save space
-__C.TRAIN.SNAPSHOT_KEPT = 3
+__C.TRAIN.SNAPSHOT_KEPT = 10
 # The time interval for saving tensorflow summaries
-__C.TRAIN.SUMMARY_INTERVAL = 100
+__C.TRAIN.SUMMARY_INTERVAL = 5000
 # Minibatch size
-__C.TRAIN.BATCH_SIZE = 32
 # Iterations between snapshots
-__C.TRAIN.SNAPSHOT_ITERS = 500
+__C.TRAIN.SNAPSHOT_ITERS = int(90000/__C.TRAIN.BATCH_SIZE)
 # Whether or not has candidate
 __C.TRAIN.CANDIDATE = True
 
@@ -49,7 +52,7 @@ __C.TEST = edict()
 __C.TEST.SHUFFLE=False
 __C.TEST.BATCH_SIZE=1
 __C.TEST.BUFFER_SIZE=1000
-
+__C.TEST.NUMBER= 22472
 # For reproducibility
 __C.RNG_SEED = 3
 # Root directory of project
@@ -61,11 +64,11 @@ __C.MATLAB = 'matlab'
 # Place outputs under an experiments directory
 __C.EXP_DIR = 'init_ex'
 
-__C.T_ATTEN_DIM = 300
-__C.G_ATTEN_DIM = 300
-__C.LSTM_SIZE = 1024
-__C.T_ATTEN_FEATURE_DIM = 500
-__C.MLP_SIZE = 3
+__C.T_ATTEN_DIM = 50
+__C.G_ATTEN_DIM = 50
+__C.LSTM_SIZE = 512
+__C.T_ATTEN_FEATURE_DIM = 1024
+__C.MLP_SIZE = 10
 __C.GAMMA = 0.5
 
 def get_output_dir(dataset, tag):
@@ -124,6 +127,7 @@ def cfg_from_file(filename):
   import yaml
   with open(filename, 'r') as f:
     yaml_cfg = edict(yaml.load(f))
+    print(yaml_cfg)
 
   _merge_a_into_b(yaml_cfg, __C)
 

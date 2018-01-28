@@ -81,29 +81,6 @@ class SolverWrapper(object):
             tf.set_random_seed(cfg.RNG_SEED)
             # Build the main computation graph
             layers = self.net.create_architecture('TRAIN', tag='default')
-            # Define the loss
-            loss = layers['class_loss']
-            # Set learning rate and momentum
-            lr = tf.Variable(cfg.TRAIN.LEARNING_RATE, trainable=False)
-            self.optimizer = tf.train.MomentumOptimizer(lr, cfg.TRAIN.MOMENTUM)
-
-            # Compute the gradients with regard to the loss
-            gvs = self.optimizer.compute_gradients(loss)
-            # Double the gradient of the bias if set
-            if cfg.TRAIN.DOUBLE_BIAS:
-                final_gvs = []
-                with tf.variable_scope('Gradient_Mult') as scope:
-                    for grad, var in gvs:
-                        scale = 1.
-                        if cfg.TRAIN.DOUBLE_BIAS and '/biases:' in var.name:
-                            scale *= 2.
-                        if not np.allclose(scale, 1.0):
-                            grad = tf.multiply(grad, scale)
-                        final_gvs.append((grad, var))
-                train_op = self.optimizer.apply_gradients(final_gvs)
-            else:
-                train_op = self.optimizer.apply_gradients(gvs)
-
             # We will handle the snapshots ourselves
             self.saver = tf.train.Saver(max_to_keep=70000)
             # Write the train and validation information to tensorboard
@@ -111,7 +88,7 @@ class SolverWrapper(object):
             self.valwriter = tf.summary.FileWriter(self.tbvaldir)
             self.testwriter = tf.summary.FileWriter(self.tbtestdir)
 
-        return lr, train_op
+        return self.net.lr
 
     def find_previous(self):
         sfiles = os.path.join(self.output_dir, 'iter_*.ckpt.meta')
@@ -138,7 +115,6 @@ class SolverWrapper(object):
         # Initial file lists are empty
         np_paths = []
         ss_paths = []
-        # Fresh train directly from ImageNet weights
         variables = tf.global_variables()
         # Initialize all variables first
         sess.run(tf.variables_initializer(variables, name='init'))
@@ -159,7 +135,7 @@ class SolverWrapper(object):
         stepsizes = []
         for stepsize in cfg.TRAIN.STEPSIZE:
             if last_snapshot_iter > stepsize:
-                rate *= cfg.TRAIN.GAMMA
+                rate *= cfg.TRAIN.LEARNING_RATE_DECAY
             else:
                 stepsizes.append(stepsize)
 
@@ -188,9 +164,10 @@ class SolverWrapper(object):
 
 
     def train_model(self, sess, max_iters):
+        test_result = open(self.tbtestdir+'/out.txt', 'w')
 
         # Construct the computation graph
-        lr, train_op = self.construct_graph(sess)
+        lr = self.construct_graph(sess)
 
         # Find previous snapshots if there is any to restore from
         lsf, nfiles, sfiles = self.find_previous()
@@ -204,44 +181,76 @@ class SolverWrapper(object):
         iter = last_snapshot_iter + 1
         last_summary_time = time.time()
         # Make sure the lists are not empty
-        stepsizes.append(max_iters)
-        stepsizes.reverse()
-        next_stepsize = stepsizes.pop()
+        lr_decay = cfg.TRAIN.LEARNING_RATE_DECAY ** max(iter/cfg.TRAIN.SNAPSHOT_ITERS-cfg.TRAIN.DECAY_EPOCH, 0.0)
+        print(lr_decay)
+        sess.run(tf.assign(lr, cfg.TRAIN.LEARNING_RATE * lr_decay))
         while iter < max_iters + 1:
-            # Learning rate
-            if iter == next_stepsize + 1:
-                # Add snapshot here before reducing the learning rate
-                self.snapshot(sess, iter)
-                rate *= cfg.TRAIN.GAMMA
-                sess.run(tf.assign(lr, rate))
-                next_stepsize = stepsizes.pop()
-
             timer.tic()
-
             now = time.time()
-            if iter == 1 or now - last_summary_time > cfg.TRAIN.SUMMARY_INTERVAL:
+            if iter == 1 or now - last_summary_time > 180:
                 # Compute the graph with summary
-                word_pred, loss, summary = self.net.train_step_with_summary(sess, self.train_handle, train_op)
+                accuracy, loss, summary = self.net.train_step_with_summary(sess, self.train_handle)
                 self.writer.add_summary(summary, float(iter))
-                # Also check the summary on the validation set
-                summary_val = self.net.get_summary(sess, self.valid_handle)
-                self.valwriter.add_summary(summary_val, float(iter))
-                summary_test = self.net.get_summary(sess, self.test_handle)
-                self.testwriter.add_summary(summary_test, float(iter))
-                last_summary_time = now
             else:
                 # Compute the graph without summary
-                word_pred, loss = self.net.train_step(sess, self.train_handle, train_op)
+                accuracy, loss = self.net.train_step(sess, self.train_handle)
             timer.toc()
 
             # Display training information
             if iter % (cfg.TRAIN.DISPLAY) == 0:
+                word_accuracy = [0.0 for p in range(5)]
+                wup_accuracy = [0.0 for p in range(5)]
+
+                for b in range(len(accuracy)):
+                    if accuracy[b][0] == 0:
+                        word_accuracy[b] = -1
+                    else:
+                        word_accuracy[b] = accuracy[b][1]/accuracy[b][0]
+                    if accuracy[b][2] == 0:
+                        wup_accuracy[b] = -1
+                    else:
+                        wup_accuracy[b] = accuracy[b][3]/accuracy[b][2]
+
                 print('iter: %d / %d, loss: %.6f\n >>> lr: %f' % \
                       (iter, max_iters, loss, lr.eval()))
                 print('speed: {:.3f}s / iter'.format(timer.average_time))
+                print(word_accuracy)
+                print(wup_accuracy)
 
             # Snapshotting
             if iter % cfg.TRAIN.SNAPSHOT_ITERS == 0:
+                self.snapshot(sess, iter)
+                # Learning rate
+                lr_decay = cfg.TRAIN.LEARNING_RATE_DECAY ** max((iter/cfg.TRAIN.SNAPSHOT_ITERS-cfg.TRAIN.DECAY_EPOCH, 0.0))
+                print(lr_decay)
+                sess.run(tf.assign(lr, cfg.TRAIN.LEARNING_RATE * lr_decay))
+
+                print('run testing...')
+                test_word_accuracy = [0.0 for p in range(5)]
+                test_wup_count = [0 for p in range(5)]
+                test_wup_value = [0.0 for p in range(5)]
+                all_loss = 0.0
+                for i in range(cfg.TEST.NUMBER):
+                    result = self.net.test_step(sess, self.test_handle)
+                    all_loss += result[3]
+                    test_word_accuracy[result[0]] += result[1]
+                    if result[2] != -1:
+                        test_wup_count[result[0]] += 1
+                        test_wup_value[result[0]] += result[2]
+
+                test_word_accuracy = [i/cfg.TEST.NUMBER for i in test_word_accuracy]
+                test_wup_accuracy = list(map(lambda x,y: x/y, test_wup_value, test_wup_count))
+                all_loss /= cfg.TEST.NUMBER
+                print(test_word_accuracy)
+                print(test_wup_accuracy)
+                print(iter, file=test_result)
+                print(test_word_accuracy, file=test_result)
+                print(test_wup_accuracy, file =test_result)
+                print(all_loss, file =test_result)
+                print(loss, file =test_result)
+
+                last_summary_time = now
+
                 last_snapshot_iter = iter
                 ss_path, np_path = self.snapshot(sess, iter)
                 np_paths.append(np_path)

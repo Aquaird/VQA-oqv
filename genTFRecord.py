@@ -37,10 +37,12 @@ split = 'train'
 dset = h5feature['training']
 j = anno[split]
 
-with tf.python_io.TFRecordWriter('/data/mm/dataset/activityNet/train.tfrecords') as writer:
+with tf.python_io.TFRecordWriter('/data/mm/dataset/activityNet/one.tfrecords') as writer:
     count = 0
     qtype_count = [0,0,0,0,0]
     for i in j:
+        if count > 0:
+            break
         # [20,7,4096] float
         features = dset[count]
         # [30, 1001] int

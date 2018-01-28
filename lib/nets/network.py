@@ -8,10 +8,12 @@ from __future__ import division
 from __future__ import print_function
 
 import tensorflow as tf
-
+from nltk.corpus import wordnet as wn
+import json
 import numpy as np
-
 from model.config import cfg
+
+answer_dict = json.load(open('/home/mm/workspace/VQA-oqv/dataset/activityNet/qa_anno/dict/answer_one_dic.json'))
 
 class Network(object):
     def __init__(self, handle_types, handle_shapes):
@@ -77,7 +79,7 @@ class Network(object):
             # [batch_size, 4096]
             feature_t_atten = tf.reshape(feature_t_atten, [-1, 4096])
             w_t_atten_feat = tf.get_variable('w_t_atten_feat', [4096, cfg.T_ATTEN_FEATURE_DIM])
-            feature_t_atten = tf.nn.sigmoid(tf.matmul(feature_t_atten, w_t_atten_feat))
+            feature_t_atten = tf.matmul(feature_t_atten, w_t_atten_feat)
             # [batch_size, cfg.T_ATTEN_FEATURE_DIM]
             self._feature_t_atten = feature_t_atten
 
@@ -95,12 +97,12 @@ class Network(object):
             w_mlp_bottom_broadcast = tf.tile(tf.reshape(w_mlp_bottom, [1,5,cfg.MLP_SIZE]), [to_tile, 1, 1])
 
             # [batch_size*20, mlp_size, 4096]
-            h_mlp = tf.sigmoid(tf.matmul(w_mlp_top_broadcast, obj_feature))
+            h_mlp = tf.nn.tanh(tf.matmul(w_mlp_top_broadcast, obj_feature))
             # [batch_size*20, 5, 4096]
-            out_mlp = tf.sigmoid(tf.matmul(w_mlp_bottom_broadcast, h_mlp))
+            out_mlp = tf.nn.tanh(tf.matmul(w_mlp_bottom_broadcast, h_mlp))
             out_mlp = tf.reshape(out_mlp, [-1,4096])
             w_pca = tf.get_variable('pca', [4096, cfg.LSTM_SIZE], initializer=self.initializer)
-            out_mlp = tf.reshape(tf.nn.sigmoid(tf.matmul(out_mlp, w_pca)), (-1,20,5,cfg.LSTM_SIZE))
+            out_mlp = tf.reshape(tf.nn.tanh(tf.matmul(out_mlp, w_pca)), (-1,20,5,cfg.LSTM_SIZE))
             self.drop_prob = tf.placeholder_with_default(1.0, shape=())
             # [batch_size, 20, 5, lstm_size]
             self.out_mlp = tf.nn.dropout(out_mlp, keep_prob=self.drop_prob)
@@ -110,7 +112,7 @@ class Network(object):
             embedding_question = tf.reshape(self._question, [-1,1001])
             w_embedding = tf.get_variable('embedding', [1001, cfg.LSTM_SIZE], initializer=self.initializer)
             # [batch_size, 30, lstm_size]
-            embeded_question = tf.reshape(tf.nn.sigmoid(tf.matmul(embedding_question, w_embedding)), (-1,30,cfg.LSTM_SIZE))
+            embeded_question = tf.reshape(tf.matmul(embedding_question, w_embedding), (-1,30,cfg.LSTM_SIZE))
 
             # q att step.1
             ques_atten_embed = tf.reshape(embeded_question, [-1, cfg.LSTM_SIZE])
@@ -166,7 +168,7 @@ class Network(object):
 
             w_objAtt_fc = tf.get_variable('w_objAtt_fc', [cfg.LSTM_SIZE, cfg.G_ATTEN_DIM], initializer=self.initializer)
             # [batch*20, G_ATTEN_DIM]
-            objAtt_fced = tf.matmul(feature_objAtt, w_objAtt_fc)
+            objAtt_fced = tf.nn.tanh(tf.matmul(feature_objAtt, w_objAtt_fc))
             obj_fced = tf.reshape(objAtt_fced, [-1,20,cfg.G_ATTEN_DIM])
             # [batch_size, 20, 30, G_ATTEN_DIM]
             objAtt_broadcast = tf.tile(tf.reshape(objAtt_fced, [-1,20,1,cfg.G_ATTEN_DIM]), [1,1,30,1])
@@ -197,7 +199,7 @@ class Network(object):
             lstm_cell = tf.contrib.rnn.DropoutWrapper(lstm_cell, output_keep_prob=self.drop_prob)
             w_mean_video_fc = tf.get_variable('w_mean', [4096, 2*cfg.LSTM_SIZE], initializer=self.initializer)
             # [batch_size, 2*lstm_size]
-            init_state = tf.sigmoid(tf.matmul(self._mean_video_feature, w_mean_video_fc))
+            init_state = tf.nn.tanh(tf.matmul(self._mean_video_feature, w_mean_video_fc))
             hidden_state = init_state
             current_state = init_state
             state = tf.nn.rnn_cell.LSTMStateTuple(hidden_state, current_state)
@@ -208,10 +210,7 @@ class Network(object):
 
     def _build_network(self, is_training=True):
         # select initializers
-        if cfg.TRAIN.TRUNCATED:
-            self.initializer = tf.truncated_normal_initializer(mean=0.0, stddev=0.01)
-        else:
-            self.initializer = tf.random_normal_initializer(mean=0.0, stddev=0.01)
+        self.initializer = tf.random_uniform_initializer(-0.01, 0.01)
 
         self._build_t_atten()
         self._build_mlp()
@@ -224,16 +223,27 @@ class Network(object):
             # [batch_size, t_att_size+lstm_size]
             softmax_input = tf.concat([self._feature_t_atten, att_lstm], axis=-1)
             w_class = tf.get_variable('w_class', [cfg.T_ATTEN_FEATURE_DIM+2*cfg.LSTM_SIZE, 1001], initializer=self.initializer)
-            softmax_input = tf.sigmoid(tf.matmul(softmax_input, w_class))
+            softmax_input = tf.matmul(softmax_input, w_class)
             softmax_output = tf.nn.softmax(softmax_input, dim=-1)
-            word_pred = tf.argmax(softmax_output, axis=1, name='word_pred')
+            word_pred = tf.reshape(tf.argmax(softmax_output, axis=1, name='word_pred'), (-1,1))
 
             cross_entropy = tf.losses.softmax_cross_entropy(onehot_labels=self._answer, logits=softmax_input)
             self._loss = tf.reduce_mean(cross_entropy)
 
         self._losses['class_loss'] = self._loss
         self._event_summaries.update(self._losses)
+        answer_word = tf.reshape(tf.argmax(self._answer, axis=1, name='word'), (-1,1))
+        self._answer_code = answer_word
+        word_accuracy = tf.to_float(tf.equal(word_pred, answer_word))
 
+        # Set learning rate and momentum
+        self.lr = tf.Variable(cfg.TRAIN.LEARNING_RATE, trainable=False)
+        self.optimizer = tf.train.MomentumOptimizer(self.lr, cfg.TRAIN.MOMENTUM)
+        #self.optimizer = tf.train.GradientDescentOptimizer(self.lr)
+
+        # Compute the gradients with regard to the loss
+        gvs = self.optimizer.compute_gradients(self._loss)
+        self.train_op = self.optimizer.apply_gradients(gvs)
 
 
         #[ batch_size, 1001]
@@ -245,6 +255,7 @@ class Network(object):
         #[ batch_size, 20, 30]
         self._predictions['q_attention'] = self._quesAtt2
         self._predictions['word_pred'] = word_pred
+        self._predictions['word_accuracy'] = word_accuracy
 
         self._score_summaries.update(self._predictions)
 
@@ -263,6 +274,7 @@ class Network(object):
         self._answer = tf.cast(features['answer'], tf.float32)
         self._candidate = tf.cast(features['candidate'], tf.float32)
         self.qa_id = tf.cast(features['qa_id'], tf.int32)
+        self.qtype = tf.cast(features['qtype'], tf.int32)
 
         training = mode == 'TRAIN'
         testing = mode == 'TEST'
@@ -305,31 +317,122 @@ class Network(object):
 
         return summary
 
-    def test_data(self, sess, handle):
-        feed_dict = {self.handle: handle}
-        summary = sess.run(self._summary_op_val, feed_dict=feed_dict)
 
-        return summary
-
-    def train_step(self, sess, handle, train_op):
+    def test_step(self, sess, handle):
         feed_dict = {self.handle:handle}
-        word_pred_code, loss, _ = sess.run([
+        qtype, word_pred_code, answer_code, word_pred_accuracy, loss = sess.run([
+            self.qtype,
             self._predictions['word_pred'],
+            self._answer_code,
+            self._predictions['word_accuracy'],
             self._loss,
-            train_op
         ], feed_dict=feed_dict)
 
-        return word_pred_code, loss
+        qtype= qtype[0][0]
+        word_pred_code= word_pred_code[0][0]
+        word_pred_accuracy= word_pred_accuracy[0][0]
+        answer_code = answer_code[0][0]
 
-    def train_step_with_summary(self, sess, handle, train_op):
+        if answer_code == 0:
+            return [qtype, word_pred_accuracy, -1, loss]
+        else:
+            answer = wn.synsets(answer_dict[str(answer_code)][0])
+            if len(answer) == 0:
+                return [qtype, word_pred_accuracy, -1, loss]
+            answer = answer[0]
+            if word_pred_code == 0:
+                return [qtype, word_pred_accuracy, 0, loss]
+            else:
+                predic = wn.synsets(answer_dict[str(word_pred_code)][0])
+                if len(predic) != 0:
+                    predic = predic[0]
+                    wup_value = answer.wup_similarity(predic)
+                    if wup_value:
+                        return [qtype, word_pred_accuracy, wup_value, loss]
+                    else:
+                        return [qtype, word_pred_accuracy, 0, loss]
+                else:
+                    return [qtype, word_pred_accuracy, 0, loss]
+
+    def train_step(self, sess, handle):
         feed_dict = {self.handle:handle}
-        word_pred_code, loss, summary, _ = sess.run([
+        qtype, word_pred_code, answer_code, word_pred_accuracy ,ta,qa,oa, loss, _ = sess.run([
+            self.qtype,
             self._predictions['word_pred'],
+            self._answer_code,
+            self._predictions['word_accuracy'],
+            self._predictions['t_attention'],
+            self._predictions['q_attention'],
+            self._predictions['o_attention'],
+            self._loss,
+            self.train_op
+        ], feed_dict=feed_dict)
+
+        qtype= np.reshape(qtype, [-1])
+        word_pred_code= np.reshape(word_pred_code, [-1])
+        word_pred_accuracy= np.reshape(word_pred_accuracy, [-1])
+        answer_code = np.reshape(answer_code, [-1])
+
+        accuracy = np.zeros((5,4), dtype='float')
+        for i in range(len(qtype)):
+            accuracy[qtype[i]][0] += 1
+            accuracy[qtype[i]][1] += word_pred_accuracy[i]
+            if answer_code[i] == 0:
+                continue
+            else:
+                answer = wn.synsets(answer_dict[str(answer_code[i])][0])
+                if len(answer) == 0:
+                    continue
+                answer = answer[0]
+                accuracy[qtype[i]][2] += 1
+                if word_pred_code[i] != 0:
+                    predic = wn.synsets(answer_dict[str(word_pred_code[i])][0])
+                    if len(predic) != 0:
+                        predic = predic[0]
+                        wup_value = answer.wup_similarity(predic)
+                        if wup_value:
+                            accuracy[qtype[i]][3] += answer.wup_similarity(predic)
+
+        return accuracy, loss
+
+    def train_step_with_summary(self, sess, handle):
+        feed_dict = {self.handle:handle}
+        qtype, word_pred_code, answer_code, word_pred_accuracy ,loss, summary, _ = sess.run([
+            self.qtype,
+            self._predictions['word_pred'],
+            self._answer_code,
+            self._predictions['word_accuracy'],
             self._loss,
             self._summary_op,
-            train_op
+            self.train_op
         ], feed_dict=feed_dict)
 
-        return word_pred_code, loss, summary
+        qtype= np.reshape(qtype, [-1])
+        word_pred_code= np.reshape(word_pred_code, [-1])
+        word_pred_accuracy= np.reshape(word_pred_accuracy, [-1])
+        answer_code = np.reshape(answer_code, [-1])
+
+
+        accuracy = np.zeros((5,4))
+        for i in range(len(qtype)):
+            accuracy[qtype[i]][0] += 1
+            accuracy[qtype[i]][1] += word_pred_accuracy[i]
+            if answer_code[i] == 0:
+                continue
+            else:
+                answer = wn.synsets(answer_dict[str(answer_code[i])][0])
+                if len(answer) == 0:
+                    continue
+                answer = answer[0]
+                accuracy[qtype[i]][2] += 1
+                if word_pred_code[i] != 0:
+                    predic = wn.synsets(answer_dict[str(word_pred_code[i])][0])
+                    if len(predic) != 0:
+                        predic = predic[0]
+                        wup_value = answer.wup_similarity(predic)
+                        if wup_value:
+                            accuracy[qtype[i]][3] += answer.wup_similarity(predic)
+
+        return accuracy, loss, summary
 
 
